@@ -5,7 +5,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <devices.h>
-#include <libfdt.h>
 #include <byteswap.h>
 
 #define BOOTVECTOR_RESET 0x28000000
@@ -151,7 +150,7 @@ void load_file(char* filename, uint64_t address, uint64_t size)
         PANIC_MSG("load_file: open file `%s` failed :(\n", filename);
 
     if (read(fd, data, size) < 1)
-        PANIC_MSG("load_file: read failed :(\n");
+        PANIC_MSG("load_file: read file `%s` failed :(\n", filename);
 
     close(fd);
 
@@ -221,7 +220,6 @@ void exception_handler(uc_engine* uc, uint32_t intr, void* user_data)
     (void)user_data;
 
     uint32_t r_pc, r_r0, r_r1, r_lr;
-    uc_arm_cp_reg r_cp;
     uc_reg_read(engine, UC_ARM_REG_PC, &r_pc);
     uc_reg_read(engine, UC_ARM_REG_R0, &r_r0);
     uc_reg_read(engine, UC_ARM_REG_R1, &r_r1);
