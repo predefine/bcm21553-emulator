@@ -1,0 +1,4 @@
+*.o
+*.d
+emu
+emmc_build/*.img
