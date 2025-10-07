@@ -148,7 +148,7 @@ void load_file(char* filename, uint64_t address, uint64_t size)
     char *data = (char*)malloc(size);
 
     if ((fd = open(filename, O_RDONLY)) < 0)
-        PANIC_MSG("load_file: open file failed :(\n");
+        PANIC_MSG("load_file: open file `%s` failed :(\n", filename);
 
     if (read(fd, data, size) < 1)
         PANIC_MSG("load_file: read failed :(\n");
