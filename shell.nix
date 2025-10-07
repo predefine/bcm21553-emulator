@@ -2,7 +2,6 @@
 pkgs.mkShell {
   nativeBuildInputs = [
     pkgs.gnumake
-    pkgs.ninja
     pkgs.gcc
     pkgs.genimage
   ];
