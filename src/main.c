@@ -1,4 +1,5 @@
 #include <unicorn/unicorn.h>
+#include <irq.h>
 #include <log.h>
 #include <stdio.h>
 #include <signal.h>
@@ -65,12 +66,13 @@ void emu_exit(int _)
 
     printf("Emulator terminating...\n");
 
-    uint32_t r_PC, r_LR;
+    uint32_t r_PC, r_LR, r_SP;
     uint32_t r_R0, r_R1, r_R2;
     uint32_t r_R3, r_R4, r_R5;
     uint32_t r_R6, r_R7, r_R8;
     uc_reg_read(engine, UC_ARM_REG_PC, &r_PC);
     uc_reg_read(engine, UC_ARM_REG_LR, &r_LR);
+    uc_reg_read(engine, UC_ARM_REG_SP, &r_SP);
     uc_reg_read(engine, UC_ARM_REG_R0, &r_R0);
     uc_reg_read(engine, UC_ARM_REG_R1, &r_R1);
     uc_reg_read(engine, UC_ARM_REG_R2, &r_R2);
@@ -80,7 +82,7 @@ void emu_exit(int _)
     uc_reg_read(engine, UC_ARM_REG_R6, &r_R6);
     uc_reg_read(engine, UC_ARM_REG_R7, &r_R7);
     uc_reg_read(engine, UC_ARM_REG_R8, &r_R8);
-    printf("PC: 0x%x, LR: 0x%x\n", r_PC, r_LR);
+    printf("PC: 0x%x, LR: 0x%x, SP: 0x%x\n", r_PC, r_LR, r_SP);
     printf("R0: 0x%x; R1: 0x%x; R2: 0x%x\n", r_R0, r_R1, r_R2);
     printf("R3: 0x%x; R4: 0x%x; R5: 0x%x\n", r_R3, r_R4, r_R5);
     printf("R6: 0x%x; R7: 0x%x; R8: 0x%x\n", r_R6, r_R7, r_R8);
@@ -258,6 +260,7 @@ void add_hooks()
     if (err)
         printf("exception handler hook add failed with error %u %s!\n", err, uc_strerror(err));
 
+    emu_register_irq_hooks(engine);
 }
 
 int main()

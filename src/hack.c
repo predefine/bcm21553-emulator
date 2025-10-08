@@ -15,6 +15,11 @@ void do_hacks(uc_engine* uc)
     tmp = 0x0000a0e1;
     uc_mem_write(uc, 0x96801A8C, &tmp, sizeof(tmp));
 
+    // MENTAL ILLNESS OR BAD `emu_make_irq` IMPLENTATION
+    // R0(always 0x28000000) > SP(equals to 0x967fff68 when calling irq handler)
+    uc_mem_write(uc, 0x96800030, &tmp, sizeof(tmp));
+    uc_mem_write(uc, 0x96800040, &tmp, sizeof(tmp));
+
     // HACK: force boot to `odin` mode
     tmp = 0xe12fff1e;
     uc_mem_write(uc, 0x96811520, &tmp, sizeof(tmp));
