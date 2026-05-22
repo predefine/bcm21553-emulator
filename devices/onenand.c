@@ -8,6 +8,9 @@
 #include <sys/stat.h>
 #include <hacks.h>
 
+// CREDITS:
+// * Samsung(TM) OneNAND512(KFG1216x2A-xxB6) specification
+
 typedef struct {
     int fd;
     uint32_t size;
@@ -17,10 +20,18 @@ typedef struct {
 
 typedef struct {
     uint32_t start_addr_1;
-    uint32_t start_addr_2;
     uint32_t start_addr_e;
     uint32_t int_reg;
 
+    // 0x1e400
+    // BSA = [11:8]
+    // BSA[3] Selection bit between BootRAM and DataRAM
+    // BSA[2] Selection bit between DataRAM0 and DataRAM1
+    uint8_t bsa_is_dataram;
+    uint8_t bsa_dataram;
+
+    uint32_t writesize;
+    uint32_t oobsize;
     onenand_image nand;
     onenand_image oob;
 } onenand_device;
@@ -95,70 +106,115 @@ void onenand_image_block_erase(onenand_image* image, uint32_t block)
     free(block_ff);
 }
 
+#define ONENAND_INT_MASTER 0x8000
+#define ONENAND_INT_READ 0x80
+
+uint32_t onenand_addr()
+{
+
+    uint32_t block = (onenand_instance.start_addr_1 << 6) + (onenand_instance.start_addr_e >> 2);
+    return block * onenand_instance.writesize;
+}
+
+uint32_t onenand_get_bufferram_main()
+{
+    if (!onenand_instance.bsa_is_dataram)
+        return 0x0; // BootRAM
+
+    if (onenand_instance.bsa_dataram)
+        return 0xc00; // DataRAM1
+    else
+        return 0x400; // DataRAM0
+}
+
+uint32_t onenand_get_bufferram_spare()
+{
+    if (!onenand_instance.bsa_is_dataram)
+        return 0x10000; // BootRAM
+
+    if (onenand_instance.bsa_dataram)
+        return 0x10060; // DataRAM1
+    else
+        return 0x10020; // DataRAM0
+}
+
 void onenand_callback (uc_engine* uc, uc_mem_type type, uint64_t address, int size, long valuel, void* user_data)
 {
     device* dev = (device*) user_data;
     uint64_t reg = ((address - dev->address)>>1)<<1;
 
-    if (reg >= 0x400 && reg <= 0x400 + (1024 * 4))
+    // BootRam area
+    // TODO: read first kb into that area instead of loading BcmBoot.img?
+    if (reg < 0x200)
         return;
-    if (reg >= 0x10020 && reg <= 0x100a0)
-            return;
+
+    // Main area
+    if (reg < 0x10000)
+        return;
+
+    // Spare area
+    if (reg < 0x12000)
+        return;
 
     if (type == UC_MEM_READ)
-    {
         uc_mem_read(uc, address, &valuel, sizeof(valuel));
-    }
     uint32_t value = valuel;
-    switch (reg)
+
+    // if (reg == 0x1e200 || reg == 0x1e202 || reg == 0x1e20e)
+    // {
+    //     uint32_t r_pc;
+    //     uc_reg_read(uc, UC_ARM_REG_PC, &r_pc);
+    //     DEBUG_MSG("[%s] Register 0x%lx is %s with value 0x%x at PC: 0x%x, %d\n", dev->name, reg, type == UC_MEM_READ ? "read" : "writen", value, r_pc, size);
+    // }
+    // do_hacks(uc);
+    switch (reg >> 1)
     {
         // UNKNOWN, ignore
-        case 0x0:
-        case 0x4:
-        case 0x14:
-        case 0x16:
-        case 0x1e006:
-        case 0x1e442:
-        case 0x1e480:
-        case 0x1e498:
-        case 0x1fe00:
-        case 0x1fe02:
-        case 0x1fe04:
-        case 0x1fe06:
-            // DEBUG_MSG("[%s] Register 0x%lx is %s with value 0x%x, %d\n", dev->name, reg, type == UC_MEM_READ ? "readed" : "writed", value, size);
+        case 0xf221:
+        case 0xf240:
+        case 0xf24c:
+        case 0xff00:
+        case 0xff01:
+        case 0xff02:
+        case 0xff03:
             break;
         // UNKNOWN, hardcode
-        case 0x1e004:
-            value = 0x31;
-            uc_mem_write(uc, address, &value, sizeof(value));
-            break;
-        case 0x1e00a:
+        case 0xf005:
             value = 1 << 8;
             uc_mem_write(uc, address, &value, sizeof(value));
             break;
         // KNOWN
-        case 0x1e000: // Manufactorer ID
+        case 0xf000: // Manufactorer ID
             value = 0xec;
             uc_mem_write(uc, address, &value, sizeof(value));
             break;
-        case 0x1e002:  // Device ID
+        case 0xf001:  // Device ID
             value = 0x50;
             uc_mem_write(uc, address, &value, sizeof(value));
             break;
-        case 0x1e200:
+        case 0xf002: // Version ID
+            value = 0x0241;
+            uc_mem_write(uc, address, &value, sizeof(value));
+            break;
+        case 0xf003: // Write size
+            value = onenand_instance.writesize;
+            uc_mem_write(uc, address, &value, sizeof(value));
+            break;
+        case 0xf100:
             onenand_instance.start_addr_1 = value;
             break;
-        case 0x1e202:
-            onenand_instance.start_addr_2 = value;
+        case 0xf101:
+            if (value != 0)
+                PANIC_MSG("0xf101(start_addr_2): 0x%x\n", value);
             break;
-        case 0x1e20e:
+        case 0xf107:
             onenand_instance.start_addr_e = value;
             break;
-        case 0x1e400:
-            if (value != 0x800)
-                PANIC_MSG("WTF?");
+        case 0xf200:
+            onenand_instance.bsa_is_dataram = (value >> 11) & 1;
+            onenand_instance.bsa_dataram = (value >> 10) & 1;
             break;
-        case 0x1e440: // cmd register
+        case 0xf220: // cmd register
             // DEBUG_MSG("ONENAND CMD %x\n", value);
             switch (value)
             {
@@ -169,78 +225,70 @@ void onenand_callback (uc_engine* uc, uc_mem_type type, uint64_t address, int si
                         PANIC_MSG("onenand: fd of nand image is 0\n");
                     }
 
-                    uint32_t block = (onenand_instance.start_addr_1 << 6) + (onenand_instance.start_addr_e >> 2);
-                    if (onenand_instance.start_addr_2 & (1 << 15))
-                    {
-                        DEBUG_MSG("second die\n");
-                        block |= (1 << 15);
-                    }
+                    uint32_t addr = onenand_addr();
 
                     void* nand_buffer = onenand_image_block_allocbuf(&onenand_instance.nand);
-                    onenand_image_block_read(&onenand_instance.nand, block, nand_buffer);
+                    onenand_image_block_read(&onenand_instance.nand, addr / onenand_instance.writesize, nand_buffer);
 
                     void* oob_buffer = onenand_image_block_allocbuf(&onenand_instance.oob);
-                    onenand_image_block_read(&onenand_instance.oob, block, oob_buffer);
+                    onenand_image_block_read(&onenand_instance.oob, addr / onenand_instance.writesize, oob_buffer);
 
-                    for(int i = 0; i < 0x1000; i++)
-                        uc_mem_write(uc, dev->address + 0x400 + i, nand_buffer + i, sizeof(uint8_t));
-                    for(int i = 0; i < 0x80; i++)
-                        uc_mem_write(uc, dev->address + 0x10020 + i, oob_buffer + i, sizeof(uint8_t));
+                    // DATARAM0
+                    for(int i = 0; i < onenand_instance.writesize; i++)
+                        uc_mem_write(uc, dev->address + onenand_get_bufferram_main() + i, nand_buffer + i, sizeof(uint8_t));
+                    for(int i = 0; i < onenand_instance.oobsize; i++)
+                        uc_mem_write(uc, dev->address + onenand_get_bufferram_spare() + i, oob_buffer + i, sizeof(uint8_t));
 
                     free(nand_buffer);
                     free(oob_buffer);
 
-                    onenand_instance.int_reg = 0x8080;
+                    onenand_instance.int_reg = ONENAND_INT_MASTER | ONENAND_INT_READ;
 
                     {
                         uint32_t r_pc;
                         uc_reg_read(uc, UC_ARM_REG_PC, &r_pc);
-                        DEBUG_MSG("READ ONENAND PC: 0x%x AT 0x%.8x, of %dKB\n", r_pc, block * 4096, block * 4096 / 1024);
+                        DEBUG_MSG("READ ONENAND PC: 0x%x %d %d, AT 0x%.8x, of %dKB\n", r_pc, onenand_instance.start_addr_1, onenand_instance.start_addr_e, addr, addr / 1024);
                     }
                     do_hacks(uc);
 
                     break;
-                case 0x23:
-                case 0x27:
-                case 0x65:
-                    onenand_instance.int_reg = 0x8000;
+                case 0x23: // Unlock Nand Block
+                case 0x27: // Unlock Nand
+                case 0x65: // OTP Access
+                    onenand_instance.int_reg = ONENAND_INT_MASTER;
                     break;
-                case 0x7f:
-                    onenand_instance.int_reg = 0x8040;
+                case 0x7f: // ONENAND_CMD_2X_CACHE_PROG
+                    onenand_instance.int_reg = ONENAND_INT_MASTER | 0x40;
                     break;
-                case 0x80:
+                case 0x80: // Program single/multiple sector data unit from buffer
                     {
-                        uint32_t block = (onenand_instance.start_addr_1 << 6) + (onenand_instance.start_addr_e >> 2);
-                        if (onenand_instance.start_addr_2 & (1 << 15))
-                        {
-                            DEBUG_MSG("second die2\n");
-                            block |= (1 << 15);
-                        }
+                        uint32_t addr = onenand_addr();
 
                         void* nand_buffer = onenand_image_block_allocbuf(&onenand_instance.nand);
                         void* oob_buffer = onenand_image_block_allocbuf(&onenand_instance.oob);
 
-                        for(int i = 0; i < 0x1000; i++)
-                            uc_mem_read(uc, dev->address + 0x400 + i, nand_buffer + i, sizeof(uint8_t));
+                        for(int i = 0; i < onenand_instance.writesize; i++)
+                            uc_mem_read(uc, dev->address + onenand_get_bufferram_main() + i, nand_buffer + i, sizeof(uint8_t));
 
-                        for(int i = 0; i < 0x80; i++)
-                            uc_mem_read(uc, dev->address + 0x10020 + i, oob_buffer + i, sizeof(uint8_t));
+                        for(int i = 0; i < onenand_instance.oobsize; i++)
+                            uc_mem_read(uc, dev->address + onenand_get_bufferram_spare() + i, oob_buffer + i, sizeof(uint8_t));
 
-                        onenand_image_block_write(&onenand_instance.nand, block, nand_buffer);
-                        onenand_image_block_write(&onenand_instance.oob, block, oob_buffer);
+                        onenand_image_block_write(&onenand_instance.nand, addr / onenand_instance.writesize, nand_buffer);
+                        onenand_image_block_write(&onenand_instance.oob, addr / onenand_instance.writesize, oob_buffer);
 
                         free(nand_buffer);
                         free(oob_buffer);
                     }
-                    onenand_instance.int_reg = 0x8040;
+                    onenand_instance.int_reg = ONENAND_INT_MASTER | 0x40;
                     break;
-                case 0x94:
+                case 0x94: // Block erase
                     onenand_image_block_erase(&onenand_instance.nand, onenand_instance.start_addr_1);
                     onenand_image_block_erase(&onenand_instance.oob, onenand_instance.start_addr_1);
-                    onenand_instance.int_reg = 0x8020;
+                    onenand_instance.int_reg = ONENAND_INT_MASTER | 0x20;
                     break;
-                case 0xf0:
-                    onenand_instance.int_reg = 0x8010;
+                case 0xf0: // Reset NAND Flash Core
+                    // TODO: reset internal state?
+                    onenand_instance.int_reg = ONENAND_INT_MASTER | 0x10;
                     break;
                 default:
                     {
@@ -251,11 +299,14 @@ void onenand_callback (uc_engine* uc, uc_mem_type type, uint64_t address, int si
                     PANIC_MSG("UNKNOWN ONENAND CMD %x\n", value);
             }
             break;
-        case 0x1e482: // interrupt register
-            uc_mem_write(uc, address, &onenand_instance.int_reg, sizeof(onenand_instance.int_reg));
+        case 0xf241: // interrupt register
+            if (type == UC_MEM_READ)
+                uc_mem_write(uc, address, &onenand_instance.int_reg, sizeof(onenand_instance.int_reg));
+            else
+                onenand_instance.int_reg = value;
             break;
-        case 0x1e49c:
-            value = 1 << 2;
+        case 0xf24e: // NAND Flash Write Protection Status Register
+            value = 1 << 2; // unlocked
             uc_mem_write(uc, address, &value, sizeof(value));
             break;
         default:
@@ -270,8 +321,10 @@ void onenand_init(uc_engine* uc, void* devptr)
     device* dev = devptr;
     (void) dev;
 
-    onenand_image_open(&onenand_instance.nand, "emmc_build/emmc.img", 4096);
-    onenand_image_open(&onenand_instance.oob, "emmc_build/emmc_oob.img", 128);
+    onenand_instance.writesize = 0x1000;
+    onenand_instance.oobsize = onenand_instance.writesize >> 5;
+    onenand_image_open(&onenand_instance.nand, "emmc_build/emmc.img", onenand_instance.writesize);
+    onenand_image_open(&onenand_instance.oob, "emmc_build/emmc_oob.img", onenand_instance.oobsize);
 }
 
 DEVICE(ONENAND1, {
